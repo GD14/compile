@@ -1,0 +1,593 @@
+// #@@range/options{
+options {
+	STATIC = false;
+	DEBUG_PARSER = true;
+	UNICODE_INPUT = true;
+	JDK_VERSION = "1.5";
+}
+// #@@}}
+PARSER_BEGIN(Parser)
+	package cn.littleisle.parser;
+	import cn.littleisle.ast.*;
+	import cn.littleisle.type.*;
+	import java.lang.reflect.*;
+	import java.util.*;
+	import java.io.*;
+
+	public class Parser{
+
+		static final public String SOURCE_ENCODING = "UTF-8";
+		private String sourceName;
+
+		static public AST parseFile(File file)
+			throws Exception {
+				try{
+					BufferedReader r=new BufferedReader(
+							new InputStreamReader(new FileInputStream(file),SOURCE_ENCODING));
+					return new Parser(r,"test").parse();
+				}
+				catch(FileNotFoundException ex){
+					throw new Exception(ex.getMessage());
+				}
+
+			}
+		public Parser(Reader s, String name){
+			this(s);
+			this.sourceName=name;
+
+		}
+		public AST parse()throws Exception{
+			try{
+				return compilation_unit();
+			}
+			catch(TokenMgrError err){
+				throw new Exception(err.getMessage());
+			}
+			catch(ParseException ex){
+				throw new Exception(ex.getMessage());	
+			}
+		}
+
+		static public void main (String[] args){
+			File file=new File(args[0]);
+			try{
+				AST ast=parseFile(file);
+				ast.dump(System.out);
+			}
+			catch(Exception ex){
+				System.out.print(ex.getMessage());
+			}
+		}
+
+		protected Location location(Token t){
+			return new Location(sourceName,t);	
+		}
+	}
+PARSER_END(Parser)
+
+	/*
+	 * lexical rules
+	 */
+	SPECIAL_TOKEN: { <SPACES: ([" ", "\t", "\n", "\r", "\f"])+> }
+
+MORE:{<"/*">: IN_BLOCK_COMMENT }
+<IN_BLOCK_COMMENT> MORE:{<~[]>}
+<IN_BLOCK_COMMENT> SPECIAL_TOKEN: {<BLOCK_COMMENT: "*/"> :DEFAULT }
+
+
+MORE: { <"'"> : IN_CHARACTER }                         // rule1
+<IN_CHARACTER> MORE: {
+	  <~["'", "\\", "\n", "\r"]> : CHARACTER_TERM      // rule2
+	| <"\\" (["0"-"7"]){3}>      : CHARACTER_TERM      // rule3
+	| <"\\" ~[]>                 : CHARACTER_TERM      // rule4
+}
+<CHARACTER_TERM> TOKEN: { <CHARACTER: "'"> : DEFAULT } // rule5
+
+
+MORE: { <"\""> : IN_STRING }                           // rule1
+<IN_STRING> MORE: {
+	  <(~["\"", "\\", "\n", "\r"])+>                   // rule2
+	| <"\\" (["0"-"7"]){3}>                            // rule3
+	| <"\\" ~[]>                                       // rule4
+}
+<IN_STRING> TOKEN: { <STRING: "\""> : DEFAULT }        // rule5
+
+
+TOKEN: {
+		  	    <VOID		:"void">
+			   |<CHAR		:"char">
+			   |<INT 		:"int">
+			   |<SHORT 		:"short">
+			   |<LONG		:"long">
+			   |<IMPORT 	:"import">
+			   |<STATIC 	:"static">
+			   |<STRUCT 	:"struct">
+			   |<UNION	 	:"union">
+			   |<CONST  	:"const">
+			   |<IF 		:"if">
+			   |<ELSE		:"else">
+			   |<WHILE		:"while">
+			   |<FOR		:"for">
+			   |<BREAK		:"break">
+			   |<RETURN		:"return">
+			   |<SWITCH		:"switch">
+			   |<CASE		:"case">
+			   |<DEFAULT_	:"default">
+			   |<CONTINUE	:"continue">
+			   |<GOTO		:"goto">
+			   |<DO			:"do">
+			   |<UNSIGNED  	:"unsigned">
+			   |<SIZEOF		:"sizeof">
+			   |<TYPEDEF 	:"typedef">
+	   }
+
+
+TOKEN: {
+		   <IDENTIFIER	:["a"-"z","A"-"Z","_"](["a"-"z","A"-"Z","_","0"-"9"])*>
+	   }
+
+TOKEN: {
+		   <INTEGER 	:["1"-"9"](["0"-"9"])*("U")?("L")?
+			   | "0" ["x","X"]  (["0"-"9","A"-"F","a"-"f"])* ("U")?("L")?
+			   | "0" (["0"-"7"])* ("U")?("L")?
+			   >
+	   }
+
+
+//the whole pragram
+AST compilation_unit():
+{
+	Token t;
+	Declarations impdecls,decls;
+}
+{ 
+//import_stmts() top_defs() <EOF>	
+	{
+		t=getToken(1);
+	}
+	decls=top_defs() <EOF>
+	{
+		return new AST(location(t),decls);
+	}
+
+}
+
+
+void import_stmts():
+{}
+{
+	//made up of import statments
+	//like:
+	//import stdio;
+	//import stdlib;
+	(import_stmt())*
+
+}
+void import_stmt():
+{}
+{
+	<IMPORT> <IDENTIFIER> ";"
+}
+
+Declarations top_defs():
+{
+	Declarations decls= new Declarations();
+	StructNode defstruct;
+}
+{
+	//made up of:
+	//		function
+	//		var
+	//		const
+	//		struct
+	//		union
+	(
+	// LOOKAHEAD(storage() typeref() <IDENTIFIER> "(")
+	// defun()
+	// | LOOKAHEAD(3)  
+	// defvars()
+	// | defconst()
+	 defstruct=defstruct() {decls.addDefstruct(defstruct);}
+	// | defunion()
+	// | typedef()
+	)*
+	{
+		return decls;	
+	}
+}
+
+void defvars():
+{}
+{
+	storage() typeref() <IDENTIFIER> ["=" expr()]
+		("," <IDENTIFIER> ["=" expr()])* ";"
+}
+
+void defun():
+{}
+{
+	storage() typeref() <IDENTIFIER> "(" params() ")" block()
+}
+
+void defconst():
+{}
+{
+	<CONST> typeref() <IDENTIFIER> "=" expr() ";"
+}
+StructNode defstruct():
+{
+	Token t;
+	String n;
+	List<Slot> membs;
+}
+{
+	t=<STRUCT> n=name() membs=member_list() ";"
+	{
+		return new StructNode(location(t),new StructTypeRef(n),n, membs);	
+	}
+}
+
+String name():
+{Token t;}
+{
+	t=<IDENTIFIER> {return t.image;}
+}
+void defunion():
+{}
+{
+	<UNION> <IDENTIFIER> member_list() ";"
+}
+void typedef():
+{}
+{
+	<TYPEDEF> typeref() <IDENTIFIER> ";"
+}
+List<Slot> member_list():
+{
+	List<Slot> membs = new ArrayList<Slot>();
+	Slot s;
+}
+{
+	
+	//"{" (typeref() <IDENTIFIER> ";")*"}"
+	"{" (s=slot()";" {membs.add(s);})* "}"
+	{
+		return membs;	
+	}
+}
+
+Slot slot():
+{
+	TypeNode t;
+	String n;
+}
+{
+	t=type() n=name(){return new Slot(t,n);}
+}
+TypeNode type():
+{
+	TypeRef ref;
+}
+{
+	ref=typeref(){return new TypeNode(ref);}
+}
+
+void storage():
+{}
+{
+	[<STATIC>]
+}
+
+
+void params():
+{}
+{
+	LOOKAHEAD(<VOID> ")") <VOID> //f(void)
+		|fixedparams() ["," "..."]   //f(int a,...)
+}
+void fixedparams():
+{}
+{
+	//Use lookahead(2) to tell argument from ellipsis
+	//both start with comma
+	//like:
+	//	int f(int a,char b)
+	//	int f(int a,...)
+	param() (LOOKAHEAD(2) "," param())*
+}
+
+void param():
+{}
+{
+
+	typeref() <IDENTIFIER>
+}
+TypeRef typeref():
+{
+	TypeRef ref;
+	Token t;
+	ParamTypeRefs params;
+}
+{
+	ref=typeref_base()
+		(
+		 "["<INTEGER>"]"		//fixed-array
+		 | "*" 				//point 
+		)*
+		{
+			return ref;	
+		}
+}
+TypeRef typeref_base():
+{
+	Token t, name;
+}
+{
+		 t=<VOID> {return new VoidTypeRef(location(t));}
+		|<CHAR>
+		|<INT>
+		|<SHORT>
+		|<LONG>
+		|LOOKAHEAD(2) <UNSIGNED> <CHAR>
+		|LOOKAHEAD(2) <UNSIGNED> <INT>
+		|LOOKAHEAD(2) <UNSIGNED> <SHORT>
+		|<UNSIGNED> <LONG>
+		|<STRUCT> <IDENTIFIER>
+		|<UNION> <IDENTIFIER>
+		//|<IDENTIFIER> //support typedef,but need to check whether the identifier has been typedefed 
+}
+
+void block():
+{}
+{
+	"{" (defvars())* stmts() "}"
+}
+
+
+void stmts():
+{}
+{
+	(stmt())*
+}
+
+void stmt():
+{}
+{
+	(
+	 ";"
+	 | LOOKAHEAD(2) labeled_stmt()
+	 | expr()
+	 | block()
+	 | if_stmt()
+	 | while_stmt()
+	 | dowhile_stmt()
+	 | for_stmt()
+	 | switch_stmt()
+	 | break_stmt()
+	 | continue_stmt()
+	 | goto_stmt()
+	 | return_stmt()
+	)
+}
+void labeled_stmt():
+{}
+{
+	<IDENTIFIER> ":" stmt()
+}
+void if_stmt():
+{}
+{
+	//lookahead(1) to avoid else conflict
+	<IF> "(" expr() ")" stmt() [LOOKAHEAD(1) <ELSE> stmt()]
+}
+void while_stmt():
+{}
+{
+	<WHILE> "(" expr() ")" stmt()
+}
+void dowhile_stmt():
+{}
+{
+	<DO>
+		stmt()
+		<WHILE>"(" expr()")" ";"
+}
+void for_stmt():
+{}
+{
+	<FOR> "(" [expr()] ";" [expr()] ";" [expr()] ")" stmt()
+}
+void switch_stmt():
+{}
+{
+	<SWITCH> "(" expr() ")" "{" case_clauses() "}"
+
+}
+void case_clauses():
+{}
+{
+	(case_clause())*
+		[default_clause()]
+}
+void case_clause():
+{}
+{
+	cases() case_body()
+}
+void cases():
+{}
+{
+	(<CASE> ":")+	
+}
+void default_clause():
+{}
+{
+	<DEFAULT_> ":" case_body()
+}
+void case_body():
+{}
+{
+	(stmt())+	
+}
+void break_stmt():
+{}
+{
+	<BREAK> ";"
+}
+void continue_stmt():
+{}
+{
+	<CONTINUE> ";" 
+}
+void goto_stmt():
+{}
+{
+	<GOTO> <IDENTIFIER> ";"
+}
+void return_stmt():
+{}
+{
+	LOOKAHEAD(2) <RETURN> ";"
+		| <RETURN> expr() ";"
+}
+
+void expr():
+{}
+{
+	LOOKAHEAD(term() "=")
+		term() "=" expr()
+		|LOOKAHEAD(term() opssign_op()) 
+		term() opssign_op() expr()
+		| expr10()
+}
+
+void opssign_op():
+{}
+{
+	(
+	 "+="
+	 | "-="
+	 | "*="
+	 | "/="
+	 | "%="
+	 | "&="
+	 | "|="
+	 | "^="
+	 | "<<="
+	 | ">>="
+	)
+
+}
+void expr10():
+{}
+{
+	expr9() ["?" expr() ":" expr10()]
+}
+void expr9():
+{}
+{
+	expr8() ("||" expr8())*
+}
+void expr8():
+{}
+{
+	expr7() ("&&" expr7())*
+}
+void expr7():
+{}
+{
+	expr6() ( ">"  expr6()
+			| "<"  expr6()
+			| ">=" expr6()
+			| "<=" expr6()
+			| "==" expr6()
+			| "!=" expr6()
+			)*	
+}
+void expr6():
+{}
+{
+	expr5() ("|" expr5())*
+}
+
+void expr5():
+{}
+{
+	expr4() ("^" expr4())*
+}
+void expr4():
+{}
+{
+	expr3() ("&" expr3())*
+}
+void expr3():
+{}
+{
+	expr2() (">>" expr2()
+			|"<<" expr2()
+			)*
+}
+void expr2():
+{}
+{
+	expr1() ("+" expr1()
+			| "-" expr1()
+			)*
+}
+void expr1():
+{}
+{
+	term() ("*" term()
+			| "/" term()
+			| "%" term()
+		   )*
+}
+void term():
+{}
+{
+	LOOKAHEAD("(" typeref())  "(" typeref() ")" term()	
+		| unary()
+}
+
+void unary():
+{}
+{
+	"++" unary()
+		|"--" unary()
+		|"+" term()   //the diff between term() and unary() is whether cast can be add or not 
+		|"-" term()
+		|"!" term()
+		|"~" term()
+		|"*" term()
+		|"&" term()
+		| LOOKAHEAD(3) <SIZEOF> "(" typeref() ")"
+		| <SIZEOF> unary()
+		| postfix()
+}
+void postfix():
+{}
+{
+	primary() ("++"
+			| "--"
+			| "[" expr() "]"
+			| "." <IDENTIFIER>
+			| "->" <IDENTIFIER>
+			| "(" args() ")"
+			)*	
+}
+
+void args():
+{}
+{
+	[expr() ("," expr())* ]
+}
+
+void primary():
+{}
+{
+		<INTEGER>
+		|<CHARACTER>
+		|<STRING>
+		|<IDENTIFIER>
+		| "(" expr() ")"
+}
