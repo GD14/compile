@@ -1,4 +1,14 @@
-struct a
-{
-
+int a=1000;
+struct sa{
+	int b;
+	int c;
 };
+int main(void){
+	int a=100;
+	{
+		static int b=100;
+	}
+	return 0;
+}
+
+

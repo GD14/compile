@@ -21,4 +21,11 @@ public class Declarations{
 	public void addDefstruct(StructNode n){
 		defstructs.add(n);	
 	}
+
+	public void addDefvar(DefinedVariable var){
+		defvars.add(var);	
+	}
+	public void addDefvars(List<DefinedVariable> vars){
+		defvars.addAll(vars);
+	}
 }

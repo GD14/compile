@@ -9,6 +9,7 @@ options {
 PARSER_BEGIN(Parser)
 	package cn.littleisle.parser;
 	import cn.littleisle.ast.*;
+	import cn.littleisle.entity.*;
 	import cn.littleisle.type.*;
 	import java.lang.reflect.*;
 	import java.util.*;
@@ -61,6 +62,34 @@ PARSER_BEGIN(Parser)
 
 		protected Location location(Token t){
 			return new Location(sourceName,t);	
+		}
+
+		private IntegerLiteralNode integerNode(Location loc,String image){
+			long i= integerValue(image);	
+			if(image.endsWith("UL")){
+				return new IntegerLiteralNode(loc,IntegerTypeRef.ulongRef(),i);	
+			}
+			else if (image.endsWith("L")){
+				return new IntegerLiteralNode(loc,IntegerTypeRef.longRef(),i);	
+			}
+			else if (image.endsWith("U")){
+				return new IntegerLiteralNode(loc,IntegerTypeRef.uintRef(),i);	
+			}
+			else {
+				return new IntegerLiteralNode(loc,IntegerTypeRef.intRef(),i);	
+			}
+		}
+		private long integerValue(String image){
+			String s=image.replaceFirst("[UL]+","");	
+			if(s.startsWith("0x")||s.startsWith("0X")){
+				return Long.parseLong(s.substring(2),16);	
+			}
+			else if(s.startsWith("0")&&!s.equals("0")){
+				return Long.parseLong(s.substring(1),8);	
+			}
+			else{
+				return Long.parseLong(s,10);	
+			}
 		}
 	}
 PARSER_END(Parser)
@@ -173,6 +202,7 @@ Declarations top_defs():
 {
 	Declarations decls= new Declarations();
 	StructNode defstruct;
+	List<DefinedVariable> defvars;
 }
 {
 	//made up of:
@@ -184,10 +214,10 @@ Declarations top_defs():
 	(
 	// LOOKAHEAD(storage() typeref() <IDENTIFIER> "(")
 	// defun()
-	// | LOOKAHEAD(3)  
-	// defvars()
+	  LOOKAHEAD(3)  
+	 	defvars=defvars() {decls.addDefvars(defvars);}
 	// | defconst()
-	 defstruct=defstruct() {decls.addDefstruct(defstruct);}
+	   | defstruct=defstruct() {decls.addDefstruct(defstruct);}
 	// | defunion()
 	// | typedef()
 	)*
@@ -196,17 +226,40 @@ Declarations top_defs():
 	}
 }
 
-void defvars():
-{}
+List<DefinedVariable> defvars():
 {
-	storage() typeref() <IDENTIFIER> ["=" expr()]
+	List<DefinedVariable> defs =new ArrayList<DefinedVariable>();
+	boolean priv;
+	TypeNode type;
+	String name;
+	ExprNode init=null;
+}
+{
+	priv=storage() type=type() name=name()["=" init=expr()]
+	{
+		defs.add(new DefinedVariable(priv,type,name,init));
+		init=null;
+	}
 		("," <IDENTIFIER> ["=" expr()])* ";"
+	{
+		return defs;	
+	}
 }
 
-void defun():
-{}
+DefinedFunction defun():
 {
-	storage() typeref() <IDENTIFIER> "(" params() ")" block()
+	boolean priv;
+	TypeRef ret;
+	String n;
+	Params ps;
+	BlockNode body;
+}
+{
+	priv=storage() ret=typeref() n=name() "(" ps=params() ")" body=block()
+	{
+		TypeRef t= new FunctionTypeRef(ret,ps.parametersTypeRef());	
+		return new DefinedFunction(priv,new TypeNode(t),n,ps,body);
+	}
 }
 
 void defconst():
@@ -272,10 +325,12 @@ TypeNode type():
 	ref=typeref(){return new TypeNode(ref);}
 }
 
-void storage():
-{}
+boolean storage():
 {
-	[<STATIC>]
+	Token t=null;
+}
+{
+	[t=<STATIC>]{return (t==null?false:true);}
 }
 
 
@@ -325,7 +380,7 @@ TypeRef typeref_base():
 {
 		 t=<VOID> {return new VoidTypeRef(location(t));}
 		|<CHAR>
-		|<INT>
+		|t=<INT> {return IntegerTypeRef.intRef(location(t));}
 		|<SHORT>
 		|<LONG>
 		|LOOKAHEAD(2) <UNSIGNED> <CHAR>
@@ -337,28 +392,56 @@ TypeRef typeref_base():
 		//|<IDENTIFIER> //support typedef,but need to check whether the identifier has been typedefed 
 }
 
-void block():
-{}
+BlockNode block():
 {
-	"{" (defvars())* stmts() "}"
+	Token t;
+	List<DefinedVariable> vars;
+	List<StmtNode> stmts;
+}
+{
+	t="{" vars=defvar_list() stmts=stmts() "}"
+	{
+		return new BlockNode(location(t),vars,stmts);	
+	}
 }
 
-
-void stmts():
-{}
+List<DefinedVariable> defvar_list():
 {
-	(stmt())*
+List<DefinedVariable> result= new ArrayList<DefinedVariable>();
+List<DefinedVariable> vars;
+}
+{
+
+	(vars=defvars() {result.addAll(vars);})*
+		{
+			return result;	
+		}
 }
 
-void stmt():
-{}
+List<StmtNode> stmts():
+{
+List<StmtNode> ss=new ArrayList<StmtNode>();
+StmtNode s;
+}
+{
+	(s=stmt() {if(s!=null)ss.add(s);})*
+	{
+		return ss;	
+	}
+}
+
+StmtNode stmt():
+{
+	StmtNode n=null;
+	ExprNode e=null;
+}
 {
 	(
 	 ";"
 	 | LOOKAHEAD(2) labeled_stmt()
-	 | expr()
-	 | block()
-	 | if_stmt()
+	 | e=expr()
+	 | n=block()
+	 | n=if_stmt()
 	 | while_stmt()
 	 | dowhile_stmt()
 	 | for_stmt()
@@ -368,17 +451,28 @@ void stmt():
 	 | goto_stmt()
 	 | return_stmt()
 	)
+	{
+		return n;	
+	}
 }
 void labeled_stmt():
 {}
 {
 	<IDENTIFIER> ":" stmt()
 }
-void if_stmt():
-{}
+IfNode if_stmt():
+{
+	Token t;
+	ExprNode cond;
+	Stmt thenBody,elseBody=null;
+}
 {
 	//lookahead(1) to avoid else conflict
-	<IF> "(" expr() ")" stmt() [LOOKAHEAD(1) <ELSE> stmt()]
+	t=<IF> "(" cond=expr() ")" thenBody=stmt() 
+			[LOOKAHEAD(1) <ELSE> elseBody=stmt()]
+		{
+			return new IfNode(location(t),cond,thenBody,elseBody);	
+		}
 }
 void while_stmt():
 {}
@@ -451,14 +545,16 @@ void return_stmt():
 		| <RETURN> expr() ";"
 }
 
-void expr():
-{}
+ExprNode expr():
+{
+	ExprNode expr;
+}
 {
 	LOOKAHEAD(term() "=")
 		term() "=" expr()
 		|LOOKAHEAD(term() opssign_op()) 
 		term() opssign_op() expr()
-		| expr10()
+		| expr=expr10(){return expr;}
 }
 
 void opssign_op():
@@ -478,79 +574,135 @@ void opssign_op():
 	)
 
 }
-void expr10():
-{}
+ExprNode expr10():
 {
-	expr9() ["?" expr() ":" expr10()]
+	ExprNode l;
 }
-void expr9():
-{}
 {
-	expr8() ("||" expr8())*
+	l=expr9() ["?" expr() ":" expr10()]
+	{
+		return l;	
+	}
 }
-void expr8():
-{}
+ExprNode expr9():
 {
-	expr7() ("&&" expr7())*
+	ExprNode l=null;
 }
-void expr7():
-{}
 {
-	expr6() ( ">"  expr6()
+	l=expr8() ("||" expr8())*
+	{
+		return l;	
+	}
+}
+ExprNode expr8():
+{
+	ExprNode l=null;
+}
+{
+	l=expr7() ("&&" expr7())*
+	{
+		return l;	
+	}
+}
+ExprNode expr7():
+{
+	ExprNode l=null,r;
+}
+{
+	l=expr6() ( ">"  expr6()
 			| "<"  expr6()
 			| ">=" expr6()
 			| "<=" expr6()
 			| "==" expr6()
 			| "!=" expr6()
 			)*	
+		{
+			return l;	
+		}
 }
-void expr6():
-{}
+ExprNode expr6():
 {
-	expr5() ("|" expr5())*
+	ExprNode l=null,r;
+}
+{
+	l=expr5() ("|" expr5())*
+	{
+		return l;	
+	}
 }
 
-void expr5():
-{}
+ExprNode expr5():
 {
-	expr4() ("^" expr4())*
+	ExprNode l=null,r;
 }
-void expr4():
-{}
 {
-	expr3() ("&" expr3())*
+	l=expr4() ("^" expr4())*
+	{
+		return l;	
+	}
 }
-void expr3():
-{}
+ExprNode expr4():
 {
-	expr2() (">>" expr2()
+	ExprNode l=null,r;
+}
+{
+	l=expr3() ("&" expr3())*
+	{
+		return l;	
+	}
+}
+ExprNode expr3():
+{
+
+	ExprNode l=null,r;
+}
+{
+	l=expr2() (">>" expr2()
 			|"<<" expr2()
 			)*
+		{
+			return l;	
+		}
 }
-void expr2():
-{}
+ExprNode expr2():
 {
-	expr1() ("+" expr1()
+	ExprNode l=null,r;
+}
+{
+	l=expr1() ("+" expr1()
 			| "-" expr1()
 			)*
+		{
+				return l;	
+		}
 }
-void expr1():
-{}
+ExprNode expr1():
 {
-	term() ("*" term()
-			| "/" term()
-			| "%" term()
-		   )*
+	ExprNode l=null,r;
 }
-void term():
-{}
+{
+	l=term() ("*" r=term() {l = new BinaryOpNode(l,"*",r);}
+			| "/" r=term() {l = new BinaryOpNode(l,"/",r);}
+			| "%" r=term() {l = new BinaryOpNode(l,"%",r);}
+		   )*
+		  {
+		  	return l;
+		  }
+}
+ExprNode term():
+{
+	ExprNode n;
+}
 {
 	LOOKAHEAD("(" typeref())  "(" typeref() ")" term()	
-		| unary()
+		| n=unary(){return n;}
 }
 
-void unary():
-{}
+ExprNode unary():
+{
+	ExprNode n;
+	TypeNode t;
+}
 {
 	"++" unary()
 		|"--" unary()
@@ -562,18 +714,28 @@ void unary():
 		|"&" term()
 		| LOOKAHEAD(3) <SIZEOF> "(" typeref() ")"
 		| <SIZEOF> unary()
-		| postfix()
+		| n=postfix()
+		{
+			return n;	
+		}
 }
-void postfix():
-{}
+ExprNode postfix():
 {
-	primary() ("++"
+	ExprNode expr,idx;
+	String memb;
+	List<ExprNode> args;
+}
+{
+	expr=primary() ("++"
 			| "--"
 			| "[" expr() "]"
 			| "." <IDENTIFIER>
 			| "->" <IDENTIFIER>
 			| "(" args() ")"
 			)*	
+			{
+				return expr;	
+			}
 }
 
 void args():
@@ -582,10 +744,15 @@ void args():
 	[expr() ("," expr())* ]
 }
 
-void primary():
-{}
+ExprNode primary():
 {
-		<INTEGER>
+	Token t;
+	ExprNode n;
+}
+{
+		t=<INTEGER>{
+			return integerNode(location(t),t.image);
+		}
 		|<CHARACTER>
 		|<STRING>
 		|<IDENTIFIER>
